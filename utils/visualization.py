@@ -90,6 +90,11 @@ class BBoxVisualization():
 
     def draw_bboxes(self, img, box, conf, cls):
         """Draw detected bounding boxes on the original image."""
+        x_min = 0
+        y_min = 0
+        y_max = 0
+        x_max = 0
+        cf = 0
         for bb, cf, cl in zip(box, conf, cls):
             cl = int(cl)
             y_min, x_min, y_max, x_max = bb[0], bb[1], bb[2], bb[3]
@@ -101,4 +106,4 @@ class BBoxVisualization():
             cls_name = 'Shuttlecock'
             txt = '{} {:.2f}'.format(cls_name, cf)
             img = draw_boxed_text(img, txt, txt_loc, color)
-        return img
+        return (img, x_min, y_min, x_max, y_max, cf)

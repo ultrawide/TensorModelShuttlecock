@@ -26,6 +26,9 @@ from utils.od_utils import read_label_map, build_trt_pb, load_trt_pb, \
                            write_graph_tensorboard, detect
 from utils.visualization import BBoxVisualization
 
+import matplotlib
+from matplotlib.pyplot import imshow
+from matplotlib import pyplot as plt
 
 # Constants
 DEFAULT_MODEL = 'ssd_inception_v2_coco'
@@ -139,6 +142,30 @@ def show_bounding_boxes(img, box, conf, cls, cls_dict):
         cv2.putText(img, txt, txt_loc, font, 0.8, BBOX_COLOR, 1)
     return img
 
+def findLines(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    kernel_size = 5
+    blur_gray = cv2.GaussianBlur(gray,(kernel_size, kernel_size), 0)
+    
+    # the canny function is magical. see https://docs.opencv.org/3.1.0/da/d22/tutorial_py_canny.html
+    low_threshold = 100
+    high_threshold = 200
+    edges = cv2.Canny(blur_gray, low_threshold, high_threshold)
+    
+    rho = 1  # distance resolution in pixels of the Hough grid
+    theta = np.pi / 180  # angular resolution in radians of the Hough grid
+    threshold = 40  # minimum number of votes (intersections in Hough grid cell)
+    min_line_length = 250  # minimum number of pixels making up a line
+    max_line_gap = 20  # maximum gap in pixels between connectable line segments
+    
+    # Run Hough on edge detected image
+    # Output "lines" is an array containing endpoints of detected line segments
+    # array element is structed as x1,y1,x2,y2
+    lines = cv2.HoughLinesP(edges, rho, theta, threshold, np.array([]),
+                                min_line_length, max_line_gap)
+
+    return lines
 
 def loop_and_detect(cam, tf_sess, conf_th, vis, od_type):
     """Loop, grab images from camera, and do object detection.
@@ -162,7 +189,42 @@ def loop_and_detect(cam, tf_sess, conf_th, vis, od_type):
         img = cam.read()
         if img is not None:
             box, conf, cls = detect(img, tf_sess, conf_th, od_type=od_type)
-            img = vis.draw_bboxes(img, box, conf, cls)
+            (img, x_min, y_min, x_max, y_max, cf) = vis.draw_bboxes(img, box, conf, cls)
+
+            # Draw the court boundaries
+            height, width, channels = img.shape
+            COURT_WIDTH=int(width/2)
+            COURT_HEIGHT=int(height/2)
+            (a,b,c,d) = (int(0),int(0),int(COURT_WIDTH),int(COURT_HEIGHT))
+            (e,f,g,h) = (int(COURT_WIDTH),int(0),int(2*COURT_WIDTH),int(COURT_HEIGHT))
+            black_img = np.copy(img) * 0
+            cv2.rectangle(black_img, (a, b), (c, d), (0,0,255), -1)
+            cv2.rectangle(black_img, (e, f), (g, h), (255,0,0), -1)
+            cv2.putText(img,'court 1',(30,80), cv2.FONT_HERSHEY_SIMPLEX,1,(255,255,255),2)
+            cv2.putText(img,'court 2',((COURT_WIDTH+30),80), cv2.FONT_HERSHEY_SIMPLEX,1,(255,255,255),2)
+            cv2.putText(img,'out of bounds', (30,(COURT_HEIGHT+30)), cv2.FONT_HERSHEY_SIMPLEX,1,(255,255,255),2)
+            img = cv2.addWeighted(img,0.8,black_img,0.4,0)
+            
+            if conf is None:
+                continue
+            if (cf >= 0.6):
+                if (isIntersect(a,b,c,d,x_min,y_min,x_max,y_max) == True and \
+                    (isIntersect(e,f,g,h,x_min,y_min,x_max,y_max) == True)):
+                    if (abs(x_min+x_max)/2 <= (COURT_WIDTH)):
+                        print("left")
+                    else:
+                        print("right")
+                elif (isIntersect(a,b,c,d,x_min,y_min,x_max,y_max) == True):
+                    print("left")
+                elif (isIntersect(e,f,g,h,x_min,y_min,x_max,y_max) == True):
+                    print("right")
+                elif (isInbound(a,b,c,d,x_min,y_min,x_max,y_max) == True):
+                    print("left")
+                elif (isInbound(e,f,g,h,x_min,y_min,x_max,y_max) == True):
+                    print("right")
+                else:
+                    print("out of bounds")
+
             if show_fps:
                 img = draw_help_and_fps(img, fps)
             cv2.imshow(WINDOW_NAME, img)
@@ -180,6 +242,73 @@ def loop_and_detect(cam, tf_sess, conf_th, vis, od_type):
         elif key == ord('F') or key == ord('f'):  # Toggle fullscreen
             full_scrn = not full_scrn
             set_full_screen(full_scrn)
+
+# https://stackoverflow.com/questions/1585525/how-to-find-the-intersection-point-between-a-line-and-a-rectangle
+# rectDims takes x1,y1,x2,y2
+# lines is an array of array
+# output: true if the rectangle dimensions intersect with a line
+def isIntersect(x1,y1,x2,y2, minX, minY, maxX, maxY):
+
+    if ((x1 <= minX and x2 <= minX) or \
+        (y1 <= minY and y2 <= minY) or \
+        (x1 >= maxX and x2 >= maxX) or \
+        (y1 >= maxY and y2 >= maxY)):
+        return False
+    
+    if (y1 > minY and y1 < maxY): 
+        return True
+    if (y2 > minY and y2 < maxY): 
+        return True
+    if (x1 > minX and x1 < maxX):
+        return True
+    if (x2 > minX and x2 < maxX):
+        return True
+    
+    return False
+
+# This function finds the boundaries of a badminton court
+def findBoundingBox(lines, width, height):
+    minX = width
+    minY = height
+    maxX = 0
+    maxY = 0
+    for line in lines:
+        for x1,y1,x2,y2 in line:
+            if (x1 < minX):
+                minX = x1
+            if (x2 < minX):
+                minX = x2
+            if (y1 < minY):
+                minY = y1
+            if (y2 < minY):
+                minY = y2
+
+            if (x1 > maxX):
+                maxX = x1
+            if (x2 > maxX):
+                maxX = x2
+            if (y1 > maxY):
+                maxY = y1
+            if (y2 > maxY):
+                maxY = y2
+
+    return (minX, minY, maxX, maxY)
+
+# This function determines whether the birdie is in or out of bounds
+def isInbound(cMinX, cMinY, cMaxX, cMaxY, bMinX, bMinY, bMaxX, bMaxY):
+    if ((cMinX <= bMinX <= cMaxX) and \
+        (cMinY <= bMinY <= cMaxY) and \
+        (cMinX <= bMaxX <= cMaxX) and \
+        (cMinY <= bMaxY <= cMaxY)):
+        return True
+    
+    if (isIntersect(cMinX,cMinY,cMinX,cMaxY,bMinX,bMinY,bMaxX,bMaxY) or \
+            isIntersect(cMaxX,cMinY,cMaxX,cMaxY,bMinX,bMinY,bMaxX,bMaxY) or \
+            isIntersect(cMinX,cMinY,cMinX,cMaxY,bMinX,bMinY,bMaxX,bMaxY) or \
+            isIntersect(cMaxX,cMinY,cMaxX,cMaxY,bMinX,bMinY,bMaxX,bMaxY)):
+        return True
+
+    return False
 
 
 def main():
